@@ -31,8 +31,9 @@ This bot monitors water distribution by analyzing photos of valve blackboards se
 
 ## 📹 Demo Video
 
-[![Watch the Demo](https://youtu.be/4f9rYxkLanI)]
+## 📹 Demo Video
 
+[![Watch the Demo](https://img.youtube.com/vi/4f9rYxkLanI/maxresdefault.jpg)](https://www.youtube.com/watch?v=4f9rYxkLanI)
 
 ## 🛠️ Tech Stack
 
