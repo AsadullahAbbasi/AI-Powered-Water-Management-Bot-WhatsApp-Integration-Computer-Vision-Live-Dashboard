@@ -1,0 +1,30 @@
+{
+  "name": "water-manage-app",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "whatsapp-client.js",
+  "scripts": {
+    "start": "nodemon whatsapp-client.mjs",
+    "dev": "node whatsapp-client.mjs"
+  },
+  "resolutions": {
+    "whatsapp-web.js/puppeteer": "^23.4.1"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "axios": "^1.8.1",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1",
+    "pino": "^10.1.0",
+    "play-sound": "^1.1.6",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.34.1",
+    "ws": "^8.18.3"
+  },
+  "description": "This repository is focused on automating and monitoring the process of sending messages and file attachments through WhatsApp. It leverages the `whatsapp-web.js` API for message delivery while introducing modular tools for both sending and tracking messages. These solutions are ideal for automating communication tasks, ensuring accurate and timely delivery.",
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>WhatsApp D5 Valve Monitor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        #status {
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            background: #fff;
+        }
+        #logPanel {
+            height: 500px;
+            overflow-y: auto;
+            padding: 15px;
+            background: white;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .entry {
+            padding: 8px;
+            margin: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .d5-alert {
+            background: #ffebee;
+            color: #c62828;
+            font-weight: bold;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .info { color: #1565c0; }
+        .error { color: #c62828; }
+        
+        #notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px;
+            background: #c62828;
+            color: white;
+            border-radius: 4px;
+            display: none;
+        }
+        #audioEnabler {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 24px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        #audioEnabler.enabled {
+            background: #4CAF50;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WhatsApp D5 Valve Monitor</h1>
+        <div id="status">Connecting to server...</div>
+        <div id="logPanel"></div>
+    </div>
+    <div id="notification">D5 Valve Detected!</div>
+    <button id="audioEnabler">Click to Enable Sound</button>
+    <audio id="alertSound" src="./panisound.mp3" preload="auto"></audio>
+
+    <script>
+        const status = document.getElementById('status');
+        const logPanel = document.getElementById('logPanel');
+        const notification = document.getElementById('notification');
+        const alertSound = document.getElementById('alertSound');
+        const audioEnabler = document.getElementById('audioEnabler');
+        let isAudioEnabled = false;
+
+        // Debug flag
+        const DEBUG = true;
+        
+        function debug(message) {
+            console.log(message,"fr");
+            if (DEBUG) {
+                console.log(`[${new Date().toLocaleTimeString()}]`, message);
+            }
+        }
+
+        function addLogEntry(type, message) {
+            
+            debug(`Adding log entry: ${type} - ${message}`);
+            
+            const entry = document.createElement('div');
+            const time = new Date().toLocaleTimeString();
+            entry.className = `entry ${type}`;
+            entry.textContent = `[${time}] ${message}`;
+            logPanel.appendChild(entry);
+            logPanel.scrollTop = logPanel.scrollHeight;
+        }
+
+        // Initialize audio on click
+        audioEnabler.addEventListener('click', async () => {
+            try {
+                // Play and immediately pause to enable audio
+                await alertSound.play();
+                alertSound.pause();
+                alertSound.currentTime = 0;
+                
+                isAudioEnabled = true;
+                audioEnabler.textContent = 'Sound Enabled ✓';
+                audioEnabler.classList.add('enabled');
+                addLogEntry('info', 'Sound notifications enabled');
+            } catch (error) {
+                addLogEntry('error', 'Failed to enable sound: ' + error.message);
+            }
+        });
+
+        function showNotification() {
+            debug('Showing notification');
+            notification.style.display = 'block';
+            if (isAudioEnabled) {
+                try {
+                    alertSound.play().catch(err => debug('Sound error: ' + err));
+                } catch (err) {
+                    debug('Sound play error: ' + err);
+                }
+            }
+            setTimeout(() => {
+                notification.style.display = 'none';
+            }, 5000);
+        }
+
+        function connect() {
+            debug('Attempting WebSocket connection...');
+            
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(`${protocol}//${window.location.host}`);
+            
+            ws.onopen = () => {
+                debug('WebSocket connected');
+                status.textContent = 'Connected to server';
+                status.style.color = 'green';
+                addLogEntry('info', 'Connected to server');
+            };
+
+
+            ws.onmessage = (event) => {
+                console.log(event.data);
+                
+                debug('Received message: ' + event.data);
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    switch(data.type) {
+                        case 'analysis':
+                            if(data.isD5) {
+                                addLogEntry('d5-alert', `D5 Valve detected! Analysis: ${data.text}`);
+                                showNotification();
+                            } else {
+                                addLogEntry('info', `Analysis: ${data.text}`);
+                            }
+                            break;
+                        case 'alert':
+                            addLogEntry('d5-alert', data.message);
+                            showNotification();
+                            break;
+                        case 'error':
+                            addLogEntry('error', `Error: ${data.message}`);
+                            break;
+                        case 'info':
+                            addLogEntry('info', data.message);
+                            break;
+                        default:
+                            debug('Unknown message type:', data.type);
+                    }
+                } catch (error) {
+                    debug('Error processing message: ' + error);
+                    addLogEntry('error', 'Failed to process server message');
+                }
+            };
+
+            ws.onclose = () => {
+                debug('WebSocket connection closed');
+                status.textContent = 'Disconnected - Reconnecting...';
+                status.style.color = 'red';
+                setTimeout(connect, 3000);
+            };
+
+            ws.onerror = (error) => {
+                debug('WebSocket error: ' + error);
+                addLogEntry('error', 'Connection error occurred');
+            };
+        }
+
+        // Start connection
+        window.addEventListener('load', () => {
+            debug('Page loaded, starting connection...');
+            connect();
+        });
+    </script>
+</body>
+</html>
