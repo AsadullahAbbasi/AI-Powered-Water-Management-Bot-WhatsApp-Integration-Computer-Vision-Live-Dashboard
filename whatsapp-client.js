@@ -1,11 +1,10 @@
-// whatsapp-client.js → FULL FINAL WORKING VERSION (D5 + Gemini + Auto Play Sound)
+// whatsapp-client.js → FINAL RENDER VERSION (No disk • Browser sound only • Always awake)
+
 import express from "express";
 import http from "http";
 import { WebSocketServer } from "ws";
 import dotenv from "dotenv";
-import qrcode from "qrcode-terminal";
 import path from "path";
-import fs from "fs";
 import { fileURLToPath } from "url";
 
 import makeWASocket, {
@@ -13,64 +12,46 @@ import makeWASocket, {
   downloadMediaMessage,
 } from "@whiskeysockets/baileys";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import playSound from "play-sound";
-import pino from "pino";   // ← REQUIRED for Baileys v6+
+import pino from "pino";
 
 dotenv.config();
-const player = playSound({});  // Auto uses ffplay/mplayer/aplay
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(express.json());
-app.use(express.static("public"));  // Your index.html + panisound.mp3 goes here
+app.use(express.static("public")); // index.html + panisound.mp3 here
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-// Gemini Setup
-const genAI = new GoogleGenerativeAI(process.env.gemini_api_key);
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-// Folders
-const AUTH_DIR = path.join(__dirname, "baileys_auth");
-const IMAGES_DIR = path.join(__dirname, "images");
-const SOUND_FILE = path.join(__dirname, "public", "panisound.mp3");
+const AUTH_DIR = "./baileys_auth"; // Render allows this folder
 
-if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
-if (!fs.existsSync(IMAGES_DIR)) fs.mkdirSync(IMAGES_DIR, { recursive: true });
-
-// Whitelist (your numbers/groups)
-const WHITELIST = new Set([
-  
-]);
-
-// WebSocket Broadcast
+// Broadcast to all browser tabs
 function broadcast(data) {
-  wss.clients.forEach(ws => ws.readyState === 1 && ws.send(JSON.stringify(data)));
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1) client.send(JSON.stringify(data));
+  });
 }
 
-// Play Alarm Sound
-function playD5Alarm() {
-  if (fs.existsSync(SOUND_FILE)) {
-    player.play(SOUND_FILE, err => {
-      if (err) console.log("Sound error:", err);
-      else console.log("D5 DETECTED → PANI SOUND PLAYED!");
-    });
-  } else {
-    console.log("panisound.mp3 not found in /public folder!");
-  }
-}
+// Keep Render from sleeping
+setInterval(() => {
+  const url = `https://${process.env.RENDER_EXTERNAL_HOSTNAME || process.env.RENDER_SERVICE_NAME + ".onrender.com"}`;
+  http.get(url, () => console.log("Ping → staying awake")).on("error", () => {});
+}, 14 * 60 * 1000); // every 14 minutes
 
-// Start Baileys Bot
-async function startBot() {
+async function connectWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
   const sock = makeWASocket({
     auth: state,
-    printQRInTerminal: false,
-    logger: pino({ level: "silent" }),  // ← Correct way in 2025
+    printQRInTerminal: true,
+    logger: pino({ level: "silent" }),
+    browser: ["D5 Pani Bot", "Chrome", "110"],
   });
 
   sock.ev.on("creds.update", saveCreds);
@@ -79,92 +60,86 @@ async function startBot() {
     const { connection, qr } = update;
 
     if (qr) {
-      console.log("\nSCAN THIS QR CODE:\n");
-      qrcode.generate(qr, { small: true });
-      broadcast({ type: "qr", message: "New QR – Scan to login!" });
+      broadcast({ type: "qr", qr });
     }
-
     if (connection === "open") {
-      console.log("WhatsApp Connected – D5 Bot is ONLINE!");
-      broadcast({ type: "info", message: "D5 Water Bot is ACTIVE!" });
+      console.log("WhatsApp Connected → D5 Bot LIVE");
+      broadcast({ type: "status", message: "Connected – Monitoring D5 Valve" });
     }
-
     if (connection === "close") {
-      const reason = update.lastDisconnect?.error?.output?.statusCode;
-      if (reason !== 401) {
-        console.log("Reconnecting...");
-        setTimeout(startBot, 5000);
-      } else {
-        console.log("Logged out. Delete baileys_auth folder and rescan QR.");
-      }
+      const shouldReconnect = update.lastDisconnect?.error?.output?.statusCode !== 401;
+      console.log(shouldReconnect ? "Reconnecting in 5s..." : "Logged out – delete baileys_auth folder");
+      if (shouldReconnect) setTimeout(connectWhatsApp, 5000);
     }
   });
 
-  // Message Handler
   sock.ev.on("messages.upsert", async ({ messages }) => {
-    const msg = messages[0];
-    if (!msg.message || msg.key.fromMe) return;
+    const m = messages[0];
+    if (!m.message || m.key.fromMe) return;
 
-    const from = msg.key.remoteJid;
+    // Support direct image or quoted image
+    let imageMessage =
+      m.message.imageMessage ||
+      m.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage;
 
-    // Detect image (direct or quoted)
-    let imageMsg = msg.message.imageMessage;
-    if (!imageMsg) {
-      const quoted = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-      imageMsg = quoted?.imageMessage;
-    }
-    if (!imageMsg) return;
+    if (!imageMessage) return;
 
-    broadcast({ type: "info", message: "New image received – analyzing..." });
+    broadcast({ type: "info", message: "New photo received – asking Gemini..." });
 
     try {
-      // Download image
-      const buffer = await downloadMediaMessage(msg, "buffer", {}, {
-        logger: pino({ level: "silent" }),
-      });
+      const buffer = await downloadMediaMessage(
+        m,
+        "buffer",
+        {},
+        { logger: pino({ level: "silent" }) }
+      );
 
-      // Save to disk
-      const filename = path.join(IMAGES_DIR, `${from.split("@")[0]}_${Date.now()}.jpg`);
-      fs.writeFileSync(filename, buffer);
-      console.log("Image saved →", filename);
+      // NO fs.writeFileSync ANYWHERE → memory only
 
-      // Send to Gemini Vision
       const result = await model.generateContent([
-        "This is a photo of a water valve blackboard. Is valve D5 currently open or showing water timing? Answer only with YES or NO first, then explain in one short sentence.",
-        { inlineData: { mimeType: imageMsg.mimetype, data: buffer.toString("base64") } },
+        "Look at this water valve board photo. Is valve D5 currently OPEN or showing water timing? Answer strictly: YES or NO first, then one short sentence.",
+        {
+          inlineData: {
+            mimeType: imageMessage.mimetype,
+            data: buffer.toString("base64"),
+          },
+        },
       ]);
 
-      const text = result.response.text();
-      const isD5 = text.toLowerCase().includes("yes") || 
-                   (text.includes("d5") && !text.includes("closed") && !text.includes("off"));
+      const text = result.response.text().trim();
+      const isD5Open = text.toUpperCase().startsWith("YES") ||
+                       text.toLowerCase().includes("d5") && 
+                       !text.toLowerCase().includes("closed") &&
+                       !text.toLowerCase().includes("off");
 
-      broadcast({ type: "analysis", text, isD5, from });
+      broadcast({ type: "ai", text, isD5Open });
 
-      if (isD5) {
-        console.log("D5 WATER TIMING DETECTED!!!");
-        broadcast({ type: "alert", message: "D5 WATER IS ON! PANI SOUND PLAYING..." });
-        playD5Alarm();  // ← SOUND PLAYS HERE
+      if (isD5Open) {
+        console.log("D5 WATER DETECTED → BROWSER ALARM!");
+        broadcast({ type: "alert", message: "PANI AAYA! D5 IS OPEN!" });
       }
 
-    } catch (err) {
-      console.error("Error:", err.message);
-      broadcast({ type: "error", message: err.message });
+    } catch (error) {
+      console.error(error);
+      broadcast({ type: "error", message: error.message });
     }
   });
 }
 
-startBot().catch(console.error);
+connectWhatsApp().catch(console.error);
 
 // Routes
-app.get("/asad", (_, res) => res.send("asad"));
+app.get("/", (_, res) =>
+  res.sendFile(path.join(__dirname, "public", "index.html"))
+);
 
-wss.on("connection", ws => {
-  console.log("Frontend connected");
-  ws.send(JSON.stringify({ type: "info", message: "D5 Water Bot Ready" }));
+wss.on("connection", (ws) => {
+  console.log("Browser dashboard connected");
+  ws.send(JSON.stringify({ type: "status", message: "D5 Water Bot Dashboard Ready" }));
 });
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-  console.log(`Put your panisound.mp3 in the /public folder`);
+  console.log(`Bot running → https://${process.env.RENDER_SERVICE_NAME}.onrender.com`);
+  console.log("Put panisound.mp3 and index.html in /public folder");
 });
