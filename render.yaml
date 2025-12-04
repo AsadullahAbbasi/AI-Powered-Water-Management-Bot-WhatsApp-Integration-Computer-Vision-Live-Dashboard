@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: d5-pani-bot
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PORT
+        value: 10000
+    healthCheckPath: /status
+    autoDeploy: true
+
